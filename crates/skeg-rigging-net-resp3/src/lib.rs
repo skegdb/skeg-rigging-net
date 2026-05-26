@@ -20,9 +20,11 @@
 //! (in-process), so the missing op never blocks the federation path.
 
 mod connection;
+mod pool;
 mod tenant;
 mod writer;
 
 pub use connection::Resp3Connection;
+pub use pool::{PoolConfig, PooledConnection, Resp3Pool};
 pub use tenant::Resp3Tenant;
 pub use writer::Resp3Writer;

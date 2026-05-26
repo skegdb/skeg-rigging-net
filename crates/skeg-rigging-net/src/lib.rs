@@ -27,6 +27,8 @@ mod envelope;
 mod error;
 mod location;
 
-pub use envelope::{RecordEnvelope, ENVELOPE_KEY_PREFIX, envelope_key_for};
+pub use envelope::{
+    DEFAULT_ZSTD_LEVEL, ENVELOPE_KEY_PREFIX, EnvelopeError, RecordEnvelope, envelope_key_for,
+};
 pub use error::NetError;
 pub use location::{TenantLocation, parse_location};

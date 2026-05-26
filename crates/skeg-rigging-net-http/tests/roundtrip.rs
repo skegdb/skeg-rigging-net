@@ -15,7 +15,9 @@ fn write_saga(dir: &std::path::Path, tenant: TenantId, content: &[u8]) {
     std::fs::write(dir.join(format!("{hex}.saga")), content).unwrap();
 }
 
-fn spawn_server(saga_dir: std::path::PathBuf) -> (u16, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+fn spawn_server(
+    saga_dir: std::path::PathBuf,
+) -> (u16, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
     let server = SagaServer::bind("127.0.0.1:0", saga_dir).unwrap();
     let port = server.local_addr().port();
     let stop = Arc::new(AtomicBool::new(false));

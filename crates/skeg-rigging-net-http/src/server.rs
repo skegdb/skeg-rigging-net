@@ -64,7 +64,10 @@ impl SagaServer {
     /// that test teardown is bearable.
     pub fn serve_until(self, stop: Arc<AtomicBool>) {
         while !stop.load(Ordering::Relaxed) {
-            match self.inner.recv_timeout(std::time::Duration::from_millis(100)) {
+            match self
+                .inner
+                .recv_timeout(std::time::Duration::from_millis(100))
+            {
                 Ok(Some(req)) => {
                     if let Err(e) = handle(req, &self.saga_dir, self.members_root.as_deref()) {
                         eprintln!("saga server: handler error: {e}");
@@ -142,7 +145,9 @@ fn respond_index(req: tiny_http::Request, saga_dir: &Path) -> Result<(), NetErro
         for entry in std::fs::read_dir(saga_dir)? {
             let entry = entry?;
             let name = entry.file_name();
-            let Some(name_str) = name.to_str() else { continue };
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
             if !name_str.ends_with(".saga") {
                 continue;
             }
@@ -159,11 +164,10 @@ fn respond_index(req: tiny_http::Request, saga_dir: &Path) -> Result<(), NetErro
         }
     }
     entries.sort_by(|a, b| a.tenant_id_hex.cmp(&b.tenant_id_hex));
-    let body = serde_json::to_vec(&entries)
-        .map_err(|e| NetError::Protocol(format!("json: {e}")))?;
+    let body =
+        serde_json::to_vec(&entries).map_err(|e| NetError::Protocol(format!("json: {e}")))?;
     let resp = Response::from_data(body).with_header(
-        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-            .expect("header"),
+        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).expect("header"),
     );
     req.respond(resp)?;
     Ok(())
@@ -197,11 +201,8 @@ fn respond_file(
         vec![
             Header::from_bytes(&b"Content-Type"[..], &b"application/octet-stream"[..])
                 .expect("header"),
-            Header::from_bytes(
-                &b"Last-Modified"[..],
-                last_modified.to_string().as_bytes(),
-            )
-            .expect("header"),
+            Header::from_bytes(&b"Last-Modified"[..], last_modified.to_string().as_bytes())
+                .expect("header"),
             Header::from_bytes(&b"ETag"[..], etag.as_bytes()).expect("header"),
         ]
     };
@@ -213,8 +214,11 @@ fn respond_file(
         }
         // Manually advertise Content-Length for HEAD.
         resp = resp.with_header(
-            Header::from_bytes(&b"Content-Length"[..], content_length.to_string().as_bytes())
-                .expect("header"),
+            Header::from_bytes(
+                &b"Content-Length"[..],
+                content_length.to_string().as_bytes(),
+            )
+            .expect("header"),
         );
         req.respond(resp)?;
     } else {

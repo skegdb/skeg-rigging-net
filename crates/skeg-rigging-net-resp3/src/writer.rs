@@ -101,11 +101,14 @@ impl Resp3Writer {
 
         let env = RecordEnvelope::new(shareable, tags, payload);
         let key = envelope_key_for(record_id.0);
+        // F.55: prefer the binary encoding. Readers detect the form
+        // by first-byte magic, so this is back-compat with older
+        // peers that still emit JSON.
         let r = self.conn.call(
             "SET",
             &[
                 Bytes::from(key.into_bytes()),
-                Bytes::from(env.encode()),
+                Bytes::from(env.encode_binary()),
             ],
         )?;
         if let Frame::Error(e) = r {

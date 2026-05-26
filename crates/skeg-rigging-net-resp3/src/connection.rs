@@ -22,10 +22,7 @@ pub struct Resp3Connection {
 impl Resp3Connection {
     /// Connect to `endpoint` (`host:port`) and run `HELLO 3` optionally
     /// with `AUTH user pass`. Sets a default read timeout of 5 seconds.
-    pub fn connect(
-        endpoint: &str,
-        auth: Option<(&str, &str)>,
-    ) -> Result<Self, NetError> {
+    pub fn connect(endpoint: &str, auth: Option<(&str, &str)>) -> Result<Self, NetError> {
         let stream = TcpStream::connect(endpoint)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -41,10 +38,7 @@ impl Resp3Connection {
 
     /// Connect using an already-established stream. Primarily for
     /// tests using a loopback mock server.
-    pub fn from_stream(
-        stream: TcpStream,
-        auth: Option<(&str, &str)>,
-    ) -> Result<Self, NetError> {
+    pub fn from_stream(stream: TcpStream, auth: Option<(&str, &str)>) -> Result<Self, NetError> {
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         stream.set_nodelay(true)?;
@@ -57,15 +51,8 @@ impl Resp3Connection {
         Ok(conn)
     }
 
-    fn hello(
-        &mut self,
-        version: u8,
-        auth: Option<(&str, &str)>,
-    ) -> Result<(), NetError> {
-        let mut args: Vec<Frame> = vec![
-            bulk_str("HELLO"),
-            bulk_str(&version.to_string()),
-        ];
+    fn hello(&mut self, version: u8, auth: Option<(&str, &str)>) -> Result<(), NetError> {
+        let mut args: Vec<Frame> = vec![bulk_str("HELLO"), bulk_str(&version.to_string())];
         if let Some((u, p)) = auth {
             args.push(bulk_str("AUTH"));
             args.push(bulk_str(u));

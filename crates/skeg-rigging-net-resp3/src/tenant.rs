@@ -134,9 +134,8 @@ pub(crate) fn vindex_info(
             }
         }
         if name.as_deref() == Some(index_name) {
-            let dim = dim.ok_or_else(|| {
-                NetError::Protocol("VINDEX.LIST row missing dim=".into())
-            })?;
+            let dim =
+                dim.ok_or_else(|| NetError::Protocol("VINDEX.LIST row missing dim=".into()))?;
             let count = count.unwrap_or(0);
             return Ok((dim, count));
         }
@@ -215,9 +214,7 @@ impl QueryFiltered for Resp3Tenant {
                 Frame::Bulk(b) => std::str::from_utf8(&b)
                     .ok()
                     .and_then(|s| s.parse::<u64>().ok())
-                    .ok_or_else(|| {
-                        QueryError::IndexCorrupted("VSEARCH id not utf8 u64".into())
-                    })?,
+                    .ok_or_else(|| QueryError::IndexCorrupted("VSEARCH id not utf8 u64".into()))?,
                 Frame::Integer(i) => i as u64,
                 other => {
                     return Err(QueryError::IndexCorrupted(format!(
@@ -273,9 +270,8 @@ impl QueryFiltered for Resp3Tenant {
                     )));
                 }
             };
-            let env = RecordEnvelope::decode(&bytes).map_err(|e| {
-                QueryError::IndexCorrupted(format!("envelope decode: {e}"))
-            })?;
+            let env = RecordEnvelope::decode(&bytes)
+                .map_err(|e| QueryError::IndexCorrupted(format!("envelope decode: {e}")))?;
             let tags: Vec<&str> = env.tags.iter().map(String::as_str).collect();
             let meta = RecordMeta {
                 record_id: RecordId(id),

@@ -122,10 +122,7 @@ fn dispatch(frame: Frame, records: &[MockRecord]) -> Frame {
                 Frame::Bulk(Bytes::from_static(b"server")),
                 Frame::Bulk(Bytes::from_static(b"skeg-mock")),
             ),
-            (
-                Frame::Bulk(Bytes::from_static(b"proto")),
-                Frame::Integer(3),
-            ),
+            (Frame::Bulk(Bytes::from_static(b"proto")), Frame::Integer(3)),
         ]),
         "SKEG.VINDEX.LIST" => Frame::Array(vec![Frame::Bulk(Bytes::from(format!(
             "name=hansa dim={DIM} kind=f32 backend=flat n_vectors={}",
@@ -167,9 +164,7 @@ fn dispatch(frame: Frame, records: &[MockRecord]) -> Frame {
                     Frame::Bulk(b) => String::from_utf8_lossy(&b).into_owned(),
                     _ => return Frame::Error("MGET arg not Bulk".into()),
                 };
-                let id: Option<u64> = key
-                    .strip_prefix("hansa:rec:")
-                    .and_then(|n| n.parse().ok());
+                let id: Option<u64> = key.strip_prefix("hansa:rec:").and_then(|n| n.parse().ok());
                 let env = id.and_then(|i| records.iter().find(|r| r.id == i));
                 match env {
                     Some(rec) => {
@@ -202,8 +197,8 @@ fn parse_usize(f: &Frame) -> Option<usize> {
 fn connect_and_resolve_dim() {
     let port = run_mock(fixture());
     let endpoint = format!("127.0.0.1:{port}");
-    let tenant = Resp3Tenant::connect(&endpoint, TenantId::from_bytes([1; 16]), None)
-        .expect("connect");
+    let tenant =
+        Resp3Tenant::connect(&endpoint, TenantId::from_bytes([1; 16]), None).expect("connect");
     assert_eq!(tenant.embedding_dim(), DIM);
     assert_eq!(tenant.record_count(), 4);
 }
@@ -212,8 +207,8 @@ fn connect_and_resolve_dim() {
 fn query_filtered_drops_non_shareable() {
     let port = run_mock(fixture());
     let endpoint = format!("127.0.0.1:{port}");
-    let tenant = Resp3Tenant::connect(&endpoint, TenantId::from_bytes([2; 16]), None)
-        .expect("connect");
+    let tenant =
+        Resp3Tenant::connect(&endpoint, TenantId::from_bytes([2; 16]), None).expect("connect");
 
     let hits = tenant
         .query_filtered(&unit(0), 5, &|m: &RecordMeta<'_>| m.shareable)
@@ -252,8 +247,8 @@ fn query_filtered_accept_all_returns_top_k_in_score_order() {
 fn read_only_view_object_safety() {
     let port = run_mock(fixture());
     let endpoint = format!("127.0.0.1:{port}");
-    let tenant = Resp3Tenant::connect(&endpoint, TenantId::from_bytes([9; 16]), None)
-        .expect("connect");
+    let tenant =
+        Resp3Tenant::connect(&endpoint, TenantId::from_bytes([9; 16]), None).expect("connect");
     let view: Box<dyn ReadOnlyView> = Box::new(tenant);
     assert_eq!(view.tenant_id(), TenantId::from_bytes([9; 16]));
     let _ = view.close();
