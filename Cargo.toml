@@ -17,7 +17,7 @@ authors = ["skeg contributors"]
 
 [workspace.dependencies]
 skeg-rigging = { path = "../skeg-rigging/crates/skeg-rigging", version = "0.1.0" }
-skeg-resp3 = { path = "../skeg/crates/skeg-resp3", version = "=0.1.1" }
+skeg-resp3 = { path = "../skeg/crates/skeg-resp3", version = "0.1" }
 bytes = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
