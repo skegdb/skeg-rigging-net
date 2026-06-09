@@ -42,7 +42,7 @@ jobs:
             cargo publish --dry-run --locked
           else
             out=$(cargo publish --locked 2>&1) || \
-              echo "$out" | grep -q 'already uploaded' || { echo "$out"; exit 1; }
+              echo "$out" | grep -qE 'already (uploaded|exists)' || { echo "$out"; exit 1; }
           fi
 
       - name: wait for crates.io index propagation
@@ -58,7 +58,7 @@ jobs:
             cargo publish --dry-run --locked
           else
             out=$(cargo publish --locked 2>&1) || \
-              echo "$out" | grep -q 'already uploaded' || { echo "$out"; exit 1; }
+              echo "$out" | grep -qE 'already (uploaded|exists)' || { echo "$out"; exit 1; }
           fi
 
       - name: cargo publish skeg-rigging-net-resp3
@@ -70,5 +70,5 @@ jobs:
             cargo publish --dry-run --locked
           else
             out=$(cargo publish --locked 2>&1) || \
-              echo "$out" | grep -q 'already uploaded' || { echo "$out"; exit 1; }
+              echo "$out" | grep -qE 'already (uploaded|exists)' || { echo "$out"; exit 1; }
           fi
