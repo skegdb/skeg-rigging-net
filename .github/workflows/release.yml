@@ -1,0 +1,40 @@
+name: Release
+
+# Publishes skeg-rigging-net-http to crates.io. The base crate
+# skeg-rigging-net is already published; this ships the HTTP
+# side-channel that depends on it. Trigger with a `v*` tag, or run
+# manually (dry_run defaults to true so a manual run verifies without
+# uploading).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip the actual cargo publish (verify only)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo publish skeg-rigging-net-http
+        working-directory: crates/skeg-rigging-net-http
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            cargo publish --dry-run --locked
+          else
+            cargo publish --locked
+          fi
