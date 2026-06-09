@@ -16,6 +16,7 @@ use skeg_rigging::{
 use skeg_rigging_net::{NetError, RecordEnvelope, envelope_key_for};
 
 use crate::connection::{Resp3Connection, encode_vector};
+use crate::pool::Resp3Pool;
 
 /// Default index name the bridge writes to / reads from. Single index
 /// per tenant; multiple hansas inside one tenant are not supported in
@@ -31,13 +32,62 @@ const MIN_CANDIDATES: u32 = 64;
 /// Default `L_search` passed to VSEARCH. Tunable per query later.
 const DEFAULT_L_SEARCH: u32 = 100;
 
-/// One peer's worth of state: a connection + cached tenant facts.
+/// One peer's worth of state: a connection source + cached tenant facts.
+///
+/// The connection source can be either:
+///
+/// - **Owned** — a single `Resp3Connection` behind a `Mutex`,
+///   serialising all calls against this tenant. Cheap to set up;
+///   builders [`Self::connect`] / [`Self::from_connection`] use this
+///   shape.
+/// - **Pooled** — an `Arc<Resp3Pool>` shared with other tenants on
+///   the same endpoint. Lets concurrent queries against the same
+///   peer use distinct connections (subject to `max_total`) instead
+///   of serialising on a single mutex. Builder [`Self::from_pool`].
 pub struct Resp3Tenant {
-    inner: Arc<Mutex<Resp3Connection>>,
+    inner: ConnSource,
     tenant_id: TenantId,
     embedding_dim: u32,
     record_count: u64,
     index_name: String,
+}
+
+/// Where a `Resp3Tenant` finds its connection. Private detail; the
+/// public surface chooses between the two via the constructors.
+enum ConnSource {
+    /// One connection, serialised by a mutex. Used by
+    /// [`Resp3Tenant::connect`] / [`Resp3Tenant::from_connection`].
+    Owned(Arc<Mutex<Resp3Connection>>),
+    /// A shared pool. Used by [`Resp3Tenant::from_pool`].
+    Pooled(Arc<Resp3Pool>),
+}
+
+impl ConnSource {
+    /// Run `f` against a connection, locking the owned mutex or
+    /// borrowing from the pool. On a pooled connection, an error
+    /// inside `f` drops the connection (`PooledConnection::discard`)
+    /// so the pool opens a fresh one on the next acquire — a
+    /// command that fails mid-call may have left the socket in an
+    /// undefined state.
+    fn with_conn<F, R>(&self, f: F) -> Result<R, NetError>
+    where
+        F: FnOnce(&mut Resp3Connection) -> Result<R, NetError>,
+    {
+        match self {
+            ConnSource::Owned(arc) => {
+                let mut guard = arc.lock();
+                f(&mut guard)
+            }
+            ConnSource::Pooled(pool) => {
+                let mut pc = pool.acquire()?;
+                let result = f(pc.conn_mut());
+                if result.is_err() {
+                    pc.discard();
+                }
+                result
+            }
+        }
+    }
 }
 
 impl Resp3Tenant {
@@ -63,7 +113,7 @@ impl Resp3Tenant {
         let mut conn = Resp3Connection::connect(endpoint, auth)?;
         let (dim, count) = vindex_info(&mut conn, index_name)?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(conn)),
+            inner: ConnSource::Owned(Arc::new(Mutex::new(conn))),
             tenant_id,
             embedding_dim: dim,
             record_count: count,
@@ -80,7 +130,38 @@ impl Resp3Tenant {
     ) -> Result<Self, NetError> {
         let (dim, count) = vindex_info(&mut conn, index_name)?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(conn)),
+            inner: ConnSource::Owned(Arc::new(Mutex::new(conn))),
+            tenant_id,
+            embedding_dim: dim,
+            record_count: count,
+            index_name: index_name.to_string(),
+        })
+    }
+
+    /// Build a tenant backed by a shared [`Resp3Pool`]. Concurrent
+    /// queries against this tenant draw distinct connections from
+    /// the pool instead of serialising on a single mutex; multiple
+    /// `Resp3Tenant`s targeting the same endpoint can share the
+    /// same pool by cloning the `Arc` and passing it here.
+    ///
+    /// The constructor acquires one connection to run `VINDEX.LIST`
+    /// for the initial `(dim, record_count)`; that connection is
+    /// returned to the pool before the tenant becomes usable.
+    pub fn from_pool(
+        pool: Arc<Resp3Pool>,
+        tenant_id: TenantId,
+        index_name: &str,
+    ) -> Result<Self, NetError> {
+        let (dim, count) = {
+            let mut pc = pool.acquire()?;
+            let result = vindex_info(pc.conn_mut(), index_name);
+            if result.is_err() {
+                pc.discard();
+            }
+            result?
+        };
+        Ok(Self {
+            inner: ConnSource::Pooled(pool),
             tenant_id,
             embedding_dim: dim,
             record_count: count,
@@ -92,8 +173,10 @@ impl Resp3Tenant {
     /// the cached value before saga rebuilds (although owner-side, not
     /// peer-side, would normally do that).
     pub fn refresh_record_count(&mut self) -> Result<u64, NetError> {
-        let mut conn = self.inner.lock();
-        let (_, count) = vindex_info(&mut conn, &self.index_name)?;
+        let index_name = self.index_name.clone();
+        let (_, count) = self
+            .inner
+            .with_conn(|conn| vindex_info(conn, &index_name))?;
         self.record_count = count;
         Ok(count)
     }
@@ -178,89 +261,49 @@ impl QueryFiltered for Resp3Tenant {
         }
 
         let oversample = (top_k.saturating_mul(OVERSAMPLE)).max(MIN_CANDIDATES);
-        let mut conn = self.inner.lock();
-
-        // 1. VSEARCH
         let vec_bytes = encode_vector(embedding);
-        let reply = conn
-            .call(
-                "SKEG.VSEARCH",
-                &[
-                    Bytes::copy_from_slice(self.index_name.as_bytes()),
-                    Bytes::copy_from_slice(oversample.to_string().as_bytes()),
-                    Bytes::copy_from_slice(DEFAULT_L_SEARCH.to_string().as_bytes()),
-                    Bytes::copy_from_slice(&vec_bytes),
-                ],
-            )
+        let index_name = self.index_name.clone();
+
+        // Acquire a connection (owned mutex OR pool) for both
+        // round-trips. Returning from the closure releases it.
+        // Protocol parsing happens inside so we don't hold the
+        // lock through Hit assembly.
+        let (candidates, envelopes) = self
+            .inner
+            .with_conn(|conn| -> Result<_, NetError> {
+                let search_reply = conn.call(
+                    "SKEG.VSEARCH",
+                    &[
+                        Bytes::copy_from_slice(index_name.as_bytes()),
+                        Bytes::copy_from_slice(oversample.to_string().as_bytes()),
+                        Bytes::copy_from_slice(DEFAULT_L_SEARCH.to_string().as_bytes()),
+                        Bytes::copy_from_slice(&vec_bytes),
+                    ],
+                )?;
+                let candidates = parse_vsearch(search_reply)?;
+                if candidates.is_empty() {
+                    return Ok((candidates, Vec::new()));
+                }
+                let mget_args: Vec<Bytes> = candidates
+                    .iter()
+                    .map(|(id, _)| Bytes::from(envelope_key_for(*id).into_bytes()))
+                    .collect();
+                let mget_reply = conn.call("MGET", &mget_args)?;
+                let envelopes = match mget_reply {
+                    Frame::Array(rows) => rows,
+                    other => {
+                        return Err(NetError::Protocol(format!(
+                            "MGET reply not Array: {other:?}"
+                        )));
+                    }
+                };
+                Ok((candidates, envelopes))
+            })
             .map_err(net_to_query)?;
-        let pairs = match reply {
-            Frame::Array(pairs) => pairs,
-            other => {
-                return Err(QueryError::IndexCorrupted(format!(
-                    "VSEARCH reply not Array: {other:?}"
-                )));
-            }
-        };
-        if pairs.len() % 2 != 0 {
-            return Err(QueryError::IndexCorrupted(format!(
-                "VSEARCH returned odd-length array: {}",
-                pairs.len()
-            )));
-        }
-        let mut candidates: Vec<(u64, f32)> = Vec::with_capacity(pairs.len() / 2);
-        let mut iter = pairs.into_iter();
-        while let (Some(id_frame), Some(score_frame)) = (iter.next(), iter.next()) {
-            let id = match id_frame {
-                Frame::Bulk(b) => std::str::from_utf8(&b)
-                    .ok()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .ok_or_else(|| QueryError::IndexCorrupted("VSEARCH id not utf8 u64".into()))?,
-                Frame::Integer(i) => i as u64,
-                other => {
-                    return Err(QueryError::IndexCorrupted(format!(
-                        "VSEARCH id frame: {other:?}"
-                    )));
-                }
-            };
-            let score = match score_frame {
-                Frame::Double(d) => d as f32,
-                Frame::Bulk(b) => std::str::from_utf8(&b)
-                    .ok()
-                    .and_then(|s| s.parse::<f32>().ok())
-                    .ok_or_else(|| {
-                        QueryError::IndexCorrupted("VSEARCH score not utf8 f32".into())
-                    })?,
-                other => {
-                    return Err(QueryError::IndexCorrupted(format!(
-                        "VSEARCH score frame: {other:?}"
-                    )));
-                }
-            };
-            candidates.push((id, score));
-        }
 
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // 2. MGET hansa:rec:<id> for each candidate.
-        let mget_args: Vec<Bytes> = candidates
-            .iter()
-            .map(|(id, _)| Bytes::from(envelope_key_for(*id).into_bytes()))
-            .collect();
-        let reply = conn.call("MGET", &mget_args).map_err(net_to_query)?;
-        let envelopes = match reply {
-            Frame::Array(rows) => rows,
-            other => {
-                return Err(QueryError::IndexCorrupted(format!(
-                    "MGET reply not Array: {other:?}"
-                )));
-            }
-        };
-
-        // 3. Filter + assemble hits.
+        // Filter + assemble hits outside the connection scope.
         let mut out: Vec<Hit> = Vec::with_capacity(top_k as usize);
-        for ((id, sim), env_frame) in candidates.into_iter().zip(envelopes.into_iter()) {
+        for ((id, sim), env_frame) in candidates.into_iter().zip(envelopes) {
             let bytes = match env_frame {
                 Frame::Bulk(b) => b,
                 Frame::Null => continue, // missing envelope: skip
@@ -296,6 +339,55 @@ impl QueryFiltered for Resp3Tenant {
         }
         Ok(out)
     }
+}
+
+/// Parse a VSEARCH reply into `(id, score)` pairs. Lives outside the
+/// trait impl so the connection closure stays focused on network I/O.
+/// Returns `NetError::Protocol` on shape mismatch so the error type
+/// matches the closure signature.
+fn parse_vsearch(reply: Frame) -> Result<Vec<(u64, f32)>, NetError> {
+    let pairs = match reply {
+        Frame::Array(pairs) => pairs,
+        other => {
+            return Err(NetError::Protocol(format!(
+                "VSEARCH reply not Array: {other:?}"
+            )));
+        }
+    };
+    if pairs.len() % 2 != 0 {
+        return Err(NetError::Protocol(format!(
+            "VSEARCH returned odd-length array: {}",
+            pairs.len()
+        )));
+    }
+    let mut candidates: Vec<(u64, f32)> = Vec::with_capacity(pairs.len() / 2);
+    let mut iter = pairs.into_iter();
+    while let (Some(id_frame), Some(score_frame)) = (iter.next(), iter.next()) {
+        let id = match id_frame {
+            Frame::Bulk(b) => std::str::from_utf8(&b)
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or_else(|| NetError::Protocol("VSEARCH id not utf8 u64".into()))?,
+            Frame::Integer(i) => i as u64,
+            other => {
+                return Err(NetError::Protocol(format!("VSEARCH id frame: {other:?}")));
+            }
+        };
+        let score = match score_frame {
+            Frame::Double(d) => d as f32,
+            Frame::Bulk(b) => std::str::from_utf8(&b)
+                .ok()
+                .and_then(|s| s.parse::<f32>().ok())
+                .ok_or_else(|| NetError::Protocol("VSEARCH score not utf8 f32".into()))?,
+            other => {
+                return Err(NetError::Protocol(format!(
+                    "VSEARCH score frame: {other:?}"
+                )));
+            }
+        };
+        candidates.push((id, score));
+    }
+    Ok(candidates)
 }
 
 impl ReadOnlyView for Resp3Tenant {

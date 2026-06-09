@@ -8,7 +8,7 @@
 
 use bytes::Bytes;
 use skeg_resp3::Frame;
-use skeg_rigging::RecordId;
+use skeg_rigging::{RecordId, TenantWrite};
 use skeg_rigging_net::{NetError, RecordEnvelope, envelope_key_for};
 
 use crate::connection::{Resp3Connection, encode_vector};
@@ -120,5 +120,28 @@ impl Resp3Writer {
     /// Returns the underlying connection. Intended for test cleanup.
     pub fn into_connection(self) -> Resp3Connection {
         self.conn
+    }
+}
+
+impl TenantWrite for Resp3Writer {
+    type Error = NetError;
+
+    /// Delegates to the inherent [`Resp3Writer::insert`], which issues
+    /// `SKEG.VSET` for the vector and `SET hansa:rec:<id>` for the
+    /// envelope. Each call is a synchronous round-trip, so `flush` is a
+    /// no-op (the default).
+    fn insert(
+        &mut self,
+        record_id: RecordId,
+        embedding: &[f32],
+        shareable: bool,
+        tags: Vec<String>,
+        payload: Vec<u8>,
+    ) -> Result<(), NetError> {
+        Resp3Writer::insert(self, record_id, embedding, shareable, tags, payload)
+    }
+
+    fn embedding_dim(&self) -> u32 {
+        self.embedding_dim
     }
 }

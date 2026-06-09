@@ -29,10 +29,14 @@
 //!
 //! `tenant_id_hex` is the lowercase 32-char hex form of the tenant id.
 
+#[cfg(feature = "async")]
+mod async_client;
 mod client;
 mod index;
 mod server;
 
+#[cfg(feature = "async")]
+pub use async_client::{AsyncSagaClient, fetch_to_path_async};
 pub use client::{SagaClient, fetch_to_path};
 pub use index::SagaIndexEntry;
 pub use server::SagaServer;

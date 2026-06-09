@@ -21,9 +21,18 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tiny_http = "0.12"
 ureq = { version = "2", default-features = false, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "http2"], optional = true }
+tokio = { version = "1", features = ["rt", "sync"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+# Async HTTP client (F.52) via reqwest. Use under Tokio runtimes. The
+# sync `SagaClient` stays the default; this is purely additive.
+async = ["dep:reqwest", "dep:tokio"]
 
 [lints]
 workspace = true

@@ -78,28 +78,38 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 fn run_mock(records: Vec<MockRecord>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().unwrap().port();
+    let records = std::sync::Arc::new(records);
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut decoder = FrameDecoder::new();
-        let mut readbuf = [0u8; 4096];
-        loop {
-            let frame = loop {
-                if let Some(f) = decoder.decode().expect("decode frame") {
-                    break Some(f);
+        // Loop-accept: a single client makes one connection (old
+        // tests); a pool can open several to the same endpoint
+        // (pooled test). Spawn a worker per connection so they
+        // can be served in parallel.
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let records = records.clone();
+            thread::spawn(move || {
+                let mut decoder = FrameDecoder::new();
+                let mut readbuf = [0u8; 4096];
+                loop {
+                    let frame = loop {
+                        if let Some(f) = decoder.decode().expect("decode frame") {
+                            break Some(f);
+                        }
+                        let n = match stream.read(&mut readbuf) {
+                            Ok(0) | Err(_) => break None,
+                            Ok(n) => n,
+                        };
+                        decoder.feed(&readbuf[..n]);
+                    };
+                    let Some(frame) = frame else { break };
+                    let reply = dispatch(frame, &records);
+                    let mut out = BytesMut::new();
+                    encode_frame(&reply, ProtoVersion::Resp3, &mut out);
+                    if stream.write_all(&out).is_err() {
+                        break;
+                    }
                 }
-                let n = match stream.read(&mut readbuf) {
-                    Ok(0) | Err(_) => break None,
-                    Ok(n) => n,
-                };
-                decoder.feed(&readbuf[..n]);
-            };
-            let Some(frame) = frame else { break };
-            let reply = dispatch(frame, &records);
-            let mut out = BytesMut::new();
-            encode_frame(&reply, ProtoVersion::Resp3, &mut out);
-            if stream.write_all(&out).is_err() {
-                break;
-            }
+            });
         }
     });
     port
