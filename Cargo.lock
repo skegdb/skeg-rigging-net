@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "skeg-rigging-net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "crc32c",
@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "skeg-rigging-net-http"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "reqwest",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "skeg-rigging-net-resp3"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "parking_lot",
